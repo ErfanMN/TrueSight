@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Conversation, ConversationMember, Message
+from .models import Conversation, ConversationMember, Message, Profile
 
 
 @admin.register(Conversation)
@@ -27,3 +27,9 @@ class MessageAdmin(admin.ModelAdmin):
         return (obj.content[:50] + "…") if len(obj.content) > 50 else obj.content
 
     short_content.short_description = "Content"
+
+
+@admin.register(Profile)
+class ProfileAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "ref_code", "created_at")
+    search_fields = ("user__username", "user__email", "ref_code")
