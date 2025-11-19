@@ -1,0 +1,77 @@
+from django.conf import settings
+from django.db import models
+
+
+class Conversation(models.Model):
+    """
+    A logical chat channel between 2+ participants.
+    For now this is a simple table; in the future you could shard by ID range.
+    """
+
+    title = models.CharField(max_length=255, blank=True)
+    is_group = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        if self.title:
+            return self.title
+        return f"Conversation {self.pk}"
+
+
+class ConversationMember(models.Model):
+    """
+    Membership of a user in a conversation.
+    This lets you support 1:1 and group chats with the same model.
+    """
+
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="memberships",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="chat_memberships",
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+    is_admin = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ("conversation", "user")
+        ordering = ["joined_at"]
+
+    def __str__(self) -> str:
+        return f"{self.user} in {self.conversation}"
+
+
+class Message(models.Model):
+    """
+    A single chat message in a conversation.
+    """
+
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="chat_messages",
+    )
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["conversation", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Message {self.pk} in {self.conversation}"
