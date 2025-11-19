@@ -8,6 +8,7 @@ urlpatterns = [
     path("messages/", views.list_messages, name="messages"),
     path("auth/request-code/", views.request_login_code, name="request_login_code"),
     path("auth/verify-code/", views.verify_login_code, name="verify_login_code"),
+    path("auth/me/profile/", views.me_profile, name="me_profile"),
     path("conversations/", views.list_conversations, name="list_conversations"),
     path(
         "conversations/start/",

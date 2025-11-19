@@ -14,15 +14,19 @@ class ChatShellPage extends StatefulWidget {
     required this.authToken,
     required this.currentUserId,
     required this.refCode,
+    required this.onSignOut,
   });
 
   final String authToken;
   final int currentUserId;
   final String refCode;
+  final VoidCallback onSignOut;
 
   @override
   State<ChatShellPage> createState() => _ChatShellPageState();
 }
+
+enum _ChatMenuAction { profile, signOut }
 
 class _ChatShellPageState extends State<ChatShellPage> {
   final List<Conversation> _conversations = [];
@@ -36,10 +40,15 @@ class _ChatShellPageState extends State<ChatShellPage> {
 
   final TextEditingController _messageController = TextEditingController();
   bool _isSending = false;
+  String _displayName = '';
+  String _email = '';
+
+  final FocusNode _inputFocusNode = FocusNode();
 
   @override
   void initState() {
     super.initState();
+    _loadProfile();
     _loadConversations();
   }
 
@@ -50,7 +59,112 @@ class _ChatShellPageState extends State<ChatShellPage> {
   @override
   void dispose() {
     _messageController.dispose();
+    _inputFocusNode.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final uri = Uri.parse('$backendBaseUrl/api/auth/me/profile/');
+      final response = await http.get(uri, headers: _authHeaders);
+      if (response.statusCode != 200) {
+        return;
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final displayName = (body['display_name'] as String?) ?? '';
+      final email = (body['email'] as String?) ?? '';
+      setState(() {
+        _displayName = displayName;
+        _email = email;
+      });
+      if (displayName.isEmpty && mounted) {
+        await _showEditProfileDialog(requireName: true);
+      }
+    } catch (_) {
+      // ignore for now
+    }
+  }
+
+  Future<void> _showEditProfileDialog({bool requireName = false}) async {
+    final controller = TextEditingController(text: _displayName);
+    String? error;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: !requireName,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Profile'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'This is the name others will see.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: controller,
+                    decoration: InputDecoration(
+                      labelText: 'Display name',
+                      hintText: 'e.g. Erfan',
+                      errorText: error,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                if (!requireName)
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Cancel'),
+                  ),
+                ElevatedButton(
+                  onPressed: () async {
+                    final name = controller.text.trim();
+                    if (name.isEmpty) {
+                      setState(() {
+                        error = 'Please enter a name.';
+                      });
+                      return;
+                    }
+                    try {
+                      final uri =
+                          Uri.parse('$backendBaseUrl/api/auth/me/profile/');
+                      final response = await http.patch(
+                        uri,
+                        headers: {
+                          'Content-Type': 'application/json',
+                          ..._authHeaders,
+                        },
+                        body: jsonEncode({'display_name': name}),
+                      );
+                      if (response.statusCode != 200) {
+                        throw Exception('Failed to update profile');
+                      }
+                      setState(() {
+                        _displayName = name;
+                      });
+                      if (context.mounted) {
+                        Navigator.of(context).pop();
+                      }
+                    } catch (e) {
+                      setState(() {
+                        error = e.toString();
+                      });
+                    }
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _loadConversations() async {
@@ -281,7 +395,17 @@ class _ChatShellPageState extends State<ChatShellPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('TrueSight Chat'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('TrueSight Chat'),
+            if (_displayName.isNotEmpty)
+              Text(
+                _displayName,
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+          ],
+        ),
         centerTitle: false,
         actions: [
           IconButton(
@@ -294,6 +418,28 @@ class _ChatShellPageState extends State<ChatShellPage> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.refresh),
+          ),
+          PopupMenuButton<_ChatMenuAction>(
+            onSelected: (value) {
+              switch (value) {
+                case _ChatMenuAction.profile:
+                  _showEditProfileDialog(requireName: false);
+                  break;
+                case _ChatMenuAction.signOut:
+                  widget.onSignOut();
+                  break;
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _ChatMenuAction.profile,
+                child: Text('Profile & settings'),
+              ),
+              PopupMenuItem(
+                value: _ChatMenuAction.signOut,
+                child: Text('Sign out'),
+              ),
+            ],
           ),
         ],
       ),
@@ -331,6 +477,7 @@ class _ChatShellPageState extends State<ChatShellPage> {
                     error: _messagesError,
                     messageController: _messageController,
                     onSendPressed: _isSending ? null : _sendMessage,
+                    inputFocusNode: _inputFocusNode,
                   ),
                 ),
               ],
@@ -367,6 +514,7 @@ class _ChatShellPageState extends State<ChatShellPage> {
                   error: _messagesError,
                   messageController: _messageController,
                   onSendPressed: _isSending ? null : _sendMessage,
+                  inputFocusNode: _inputFocusNode,
                 ),
               ),
             ],
@@ -549,6 +697,7 @@ class ConversationArea extends StatelessWidget {
     required this.error,
     required this.messageController,
     required this.onSendPressed,
+    required this.inputFocusNode,
   });
 
   final Conversation? conversation;
@@ -558,6 +707,7 @@ class ConversationArea extends StatelessWidget {
   final String? error;
   final TextEditingController messageController;
   final VoidCallback? onSendPressed;
+  final FocusNode inputFocusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -641,14 +791,41 @@ class ConversationArea extends StatelessWidget {
           child: Row(
             children: [
               Expanded(
-                child: TextField(
-                  controller: messageController,
-                  minLines: 1,
-                  maxLines: 4,
-                  decoration: const InputDecoration(
-                    hintText: 'Type a message…',
-                    border: OutlineInputBorder(),
-                    isDense: true,
+                child: RawKeyboardListener(
+                  focusNode: inputFocusNode,
+                  onKey: (event) {
+                    if (event is! RawKeyDownEvent) return;
+                    if (event.logicalKey == LogicalKeyboardKey.enter) {
+                      final isCtrlPressed = event.isControlPressed;
+                      if (isCtrlPressed) {
+                        final text = messageController.text;
+                        final selection = messageController.selection;
+                        final insertionIndex = selection.isValid
+                            ? selection.start
+                            : text.length;
+                        final newText = text.replaceRange(
+                          insertionIndex,
+                          insertionIndex,
+                          '\n',
+                        );
+                        messageController.text = newText;
+                        messageController.selection = TextSelection.fromPosition(
+                          TextPosition(offset: insertionIndex + 1),
+                        );
+                      } else {
+                        onSendPressed?.call();
+                      }
+                    }
+                  },
+                  child: TextField(
+                    controller: messageController,
+                    minLines: 1,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      hintText: 'Type a message…',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
                   ),
                 ),
               ),

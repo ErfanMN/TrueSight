@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from .models import Conversation, Message
+from .models import Conversation, Message, Profile
 
 
 class UserSummarySerializer(serializers.ModelSerializer):
@@ -24,3 +24,9 @@ class MessageSerializer(serializers.ModelSerializer):
         fields = ("id", "conversation", "sender", "content", "created_at")
         read_only_fields = ("id", "conversation", "sender", "created_at")
 
+
+class ProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Profile
+        fields = ("display_name", "ref_code", "avatar_color")
+        read_only_fields = ("ref_code",)

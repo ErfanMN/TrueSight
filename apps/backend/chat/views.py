@@ -13,7 +13,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .models import Conversation, ConversationMember, LoginCode, Message, Profile
-from .serializers import ConversationSerializer, MessageSerializer
+from .serializers import ConversationSerializer, MessageSerializer, ProfileSerializer
 
 
 @api_view(["GET"])
@@ -150,17 +150,16 @@ def verify_login_code(request):
 
     token, _ = Token.objects.get_or_create(user=user)
 
-    return Response(
-        {
-            "token": token.key,
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "ref_code": profile.ref_code,
-            },
-        }
-    )
+    user_payload = {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "ref_code": profile.ref_code,
+        "display_name": profile.display_name or "",
+        "avatar_color": profile.avatar_color or "",
+    }
+
+    return Response({"token": token.key, "user": user_payload})
 
 
 @api_view(["GET"])
@@ -176,6 +175,27 @@ def list_conversations(request):
     )
     serializer = ConversationSerializer(qs, many=True)
     return Response({"results": serializer.data})
+
+
+@api_view(["GET", "PATCH"])
+def me_profile(request):
+    """
+    Retrieve or update the authenticated user's profile.
+    """
+
+    profile, _ = Profile.objects.get_or_create(user=request.user)
+
+    if request.method == "GET":
+        serializer = ProfileSerializer(profile)
+        data = serializer.data
+        data["email"] = request.user.email
+        data["user_id"] = request.user.id
+        return Response(data)
+
+    serializer = ProfileSerializer(profile, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
 
 
 @api_view(["POST"])

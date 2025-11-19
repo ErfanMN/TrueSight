@@ -118,6 +118,8 @@ class Profile(models.Model):
         related_name="profile",
     )
     ref_code = models.CharField(max_length=6, unique=True)
+    display_name = models.CharField(max_length=64, blank=True)
+    avatar_color = models.CharField(max_length=7, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
