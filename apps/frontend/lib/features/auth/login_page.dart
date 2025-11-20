@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../../core/config.dart';
 import '../../models/auth_session.dart';
+import '../../widgets/hexagon_logo.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({
@@ -146,6 +147,17 @@ class _LoginPageState extends State<LoginPage> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                const Center(
+                  child: HexagonLogo(size: 56),
+                ),
+                const SizedBox(height: 16),
+                Center(
+                  child: Text(
+                    'TrueSight Chat',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                const SizedBox(height: 16),
                 Text(
                   'Sign in with email',
                   style: Theme.of(context).textTheme.headlineSmall,
@@ -220,4 +232,3 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 }
-

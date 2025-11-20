@@ -10,15 +10,26 @@ class TrueSightChatApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final base = ThemeData.dark(useMaterial3: true);
+    // Softer, more neutral dark theme inspired by Material 3.
+    const colorScheme = ColorScheme.dark(
+      primary: Color(0xFF14B8A6), // teal
+      secondary: Color(0xFF22C55E), // green accent
+      background: Color(0xFF020617),
+      surface: Color(0xFF020617),
+      surfaceVariant: Color(0xFF111827),
+    );
+
     return MaterialApp(
       title: 'TrueSight Chat',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0F172A),
-          brightness: Brightness.dark,
+      theme: base.copyWith(
+        colorScheme: colorScheme,
+        scaffoldBackgroundColor: colorScheme.background,
+        appBarTheme: base.appBarTheme.copyWith(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
         ),
-        useMaterial3: true,
       ),
       home: const _RootShell(),
     );

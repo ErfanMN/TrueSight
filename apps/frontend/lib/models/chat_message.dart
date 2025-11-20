@@ -5,7 +5,8 @@ class ChatMessage {
     required this.content,
     required this.createdAt,
     this.senderId,
-    this.senderUsername,
+    this.senderName,
+    this.senderAvatarColor,
   });
 
   final int id;
@@ -13,7 +14,8 @@ class ChatMessage {
   final String content;
   final DateTime createdAt;
   final int? senderId;
-  final String? senderUsername;
+  final String? senderName;
+  final String? senderAvatarColor;
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
     final sender = json['sender'] as Map<String, dynamic>?;
@@ -24,8 +26,13 @@ class ChatMessage {
       content: json['content'] as String,
       createdAt: DateTime.parse(json['created_at'] as String),
       senderId: sender != null ? sender['id'] as int? : null,
-      senderUsername: sender != null ? sender['username'] as String? : null,
+      senderName: sender != null
+          ? (sender['display_name'] as String? ??
+              sender['username'] as String? ??
+              '')
+          : null,
+      senderAvatarColor:
+          sender != null ? sender['avatar_color'] as String? : null,
     );
   }
 }
-

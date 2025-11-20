@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../../core/config.dart';
 import '../../models/chat_message.dart';
 import '../../models/conversation.dart';
+import '../../widgets/hexagon_logo.dart';
 
 class ChatShellPage extends StatefulWidget {
   const ChatShellPage({
@@ -44,12 +46,24 @@ class _ChatShellPageState extends State<ChatShellPage> {
   String _email = '';
 
   final FocusNode _inputFocusNode = FocusNode();
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _loadProfile();
     _loadConversations();
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) {
+        if (_selectedConversation != null && !_isLoadingMessages) {
+          _loadMessagesForConversation(
+            _selectedConversation!,
+            silent: true,
+          );
+        }
+      },
+    );
   }
 
   Map<String, String> get _authHeaders => {
@@ -60,6 +74,7 @@ class _ChatShellPageState extends State<ChatShellPage> {
   void dispose() {
     _messageController.dispose();
     _inputFocusNode.dispose();
+    _pollTimer?.cancel();
     super.dispose();
   }
 
@@ -208,11 +223,16 @@ class _ChatShellPageState extends State<ChatShellPage> {
     }
   }
 
-  Future<void> _loadMessagesForConversation(Conversation conversation) async {
-    setState(() {
-      _isLoadingMessages = true;
-      _messagesError = null;
-    });
+  Future<void> _loadMessagesForConversation(
+    Conversation conversation, {
+    bool silent = false,
+  }) async {
+    if (!silent) {
+      setState(() {
+        _isLoadingMessages = true;
+        _messagesError = null;
+      });
+    }
 
     try {
       final uri = Uri.parse(
@@ -239,7 +259,7 @@ class _ChatShellPageState extends State<ChatShellPage> {
         _messagesError = e.toString();
       });
     } finally {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() {
           _isLoadingMessages = false;
         });
@@ -395,15 +415,21 @@ class _ChatShellPageState extends State<ChatShellPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        title: Row(
           children: [
-            const Text('TrueSight Chat'),
-            if (_displayName.isNotEmpty)
-              Text(
-                _displayName,
-                style: Theme.of(context).textTheme.labelSmall,
-              ),
+            const HexagonLogo(size: 24),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('TrueSight Chat'),
+                if (_displayName.isNotEmpty)
+                  Text(
+                    _displayName,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+              ],
+            ),
           ],
         ),
         centerTitle: false,
@@ -668,12 +694,12 @@ class ConversationList extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.all(12),
-            child: SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: colorScheme.primary,
-                  foregroundColor: colorScheme.onPrimary,
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: colorScheme.primary,
+                    foregroundColor: Colors.white,
                 ),
                 onPressed: onStartNewConversation,
                 icon: const Icon(Icons.chat_outlined),
@@ -708,6 +734,35 @@ class ConversationArea extends StatelessWidget {
   final TextEditingController messageController;
   final VoidCallback? onSendPressed;
   final FocusNode inputFocusNode;
+
+  Color _avatarColorFromHex(String? hex, Color fallback) {
+    if (hex == null || hex.isEmpty) return fallback;
+    try {
+      final cleaned = hex.replaceFirst('#', '');
+      return Color(int.parse('FF$cleaned', radix: 16));
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  Widget _buildAvatar(BuildContext context, ChatMessage msg, bool isOwn) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final baseColor =
+        _avatarColorFromHex(msg.senderAvatarColor, colorScheme.secondary);
+    final initials =
+        (msg.senderName?.isNotEmpty ?? false) ? msg.senderName![0].toUpperCase() : '?';
+    return CircleAvatar(
+      radius: 16,
+      backgroundColor: baseColor.withOpacity(0.9),
+      child: Text(
+        initials,
+        style: Theme.of(context)
+            .textTheme
+            .labelSmall
+            ?.copyWith(color: colorScheme.onSecondary),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -747,39 +802,88 @@ class ConversationArea extends StatelessWidget {
                         final isOwn =
                             msg.senderId != null && msg.senderId == currentUserId;
 
-                        return Align(
-                          alignment: isOwn
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.symmetric(
-                              vertical: 8,
-                              horizontal: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isOwn
-                                  ? colorScheme.primaryContainer
-                                  : colorScheme.surfaceVariant,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (!isOwn)
-                                  Text(
-                                    msg.senderUsername ?? 'user',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelSmall
-                                        ?.copyWith(
-                                          color: colorScheme.onSurfaceVariant,
-                                        ),
+                        final bubble = Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 8,
+                            horizontal: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            gradient: isOwn
+                                ? LinearGradient(
+                                    colors: [
+                                      colorScheme.primary.withOpacity(0.95),
+                                      colorScheme.primary.withOpacity(0.80),
+                                    ],
+                                  )
+                                : LinearGradient(
+                                    colors: [
+                                      colorScheme.surfaceVariant
+                                          .withOpacity(0.9),
+                                      colorScheme.surface
+                                          .withOpacity(0.9),
+                                    ],
                                   ),
-                                if (!isOwn) const SizedBox(height: 2),
-                                Text(msg.content),
-                              ],
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: isOwn
+                                  ? colorScheme.primary.withOpacity(0.4)
+                                  : colorScheme.surfaceVariant
+                                      .withOpacity(0.6),
                             ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.25),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (!isOwn)
+                                Text(
+                                  (msg.senderName?.isNotEmpty ?? false)
+                                      ? msg.senderName!
+                                      : 'User',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall
+                                      ?.copyWith(
+                                        color: colorScheme.secondary
+                                            .withOpacity(0.9),
+                                      ),
+                                ),
+                              if (!isOwn) const SizedBox(height: 2),
+                              Text(
+                                msg.content,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                      color: isOwn
+                                          ? colorScheme.onPrimary
+                                          : colorScheme.onSurface,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        );
+
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            mainAxisAlignment: isOwn
+                                ? MainAxisAlignment.end
+                                : MainAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (!isOwn) _buildAvatar(context, msg, isOwn),
+                              if (!isOwn) const SizedBox(width: 8),
+                              Flexible(child: bubble),
+                              if (isOwn) const SizedBox(width: 8),
+                              if (isOwn) _buildAvatar(context, msg, isOwn),
+                            ],
                           ),
                         );
                       },

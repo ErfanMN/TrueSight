@@ -1,17 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="hexGradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#38bdf8"/>
-      <stop offset="100%" stop-color="#0f172a"/>
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" fill="#020617"/>
   <polygon
     points="32 4 56 18 56 46 32 60 8 46 8 18"
-    fill="url(#hexGradient)"
-    stroke="#020617"
-    stroke-width="3"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="4"
     stroke-linejoin="round"
   />
 </svg>
-

@@ -5,9 +5,16 @@ from .models import Conversation, Message, Profile
 
 
 class UserSummarySerializer(serializers.ModelSerializer):
+    display_name = serializers.CharField(
+        source="profile.display_name", read_only=True, default=""
+    )
+    avatar_color = serializers.CharField(
+        source="profile.avatar_color", read_only=True, default=""
+    )
+
     class Meta:
         model = get_user_model()
-        fields = ("id", "username")
+        fields = ("id", "username", "display_name", "avatar_color")
 
 
 class ConversationSerializer(serializers.ModelSerializer):

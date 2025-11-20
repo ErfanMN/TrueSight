@@ -10,12 +10,11 @@ class HexagonLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     return CustomPaint(
       size: Size.square(size),
       painter: _HexagonPainter(
-        fill: colorScheme.primary,
-        outline: colorScheme.onPrimary.withOpacity(0.9),
+        fill: Colors.transparent,
+        outline: Colors.white,
       ),
     );
   }
@@ -60,4 +59,3 @@ class _HexagonPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
-

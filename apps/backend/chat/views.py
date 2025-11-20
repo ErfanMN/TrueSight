@@ -68,9 +68,10 @@ def request_login_code(request):
         )
 
     User = get_user_model()
+    local_part = email.split("@", 1)[0] if "@" in email else email
     user, _ = User.objects.get_or_create(
         email=email,
-        defaults={"username": email},
+        defaults={"username": local_part},
     )
     if not user.email:
         user.email = email
@@ -136,6 +137,12 @@ def verify_login_code(request):
     login_code.is_used = True
     login_code.save(update_fields=["is_used"])
 
+    # Normalise username to avoid leaking email addresses.
+    if "@" in (user.username or ""):
+        local_part = user.username.split("@", 1)[0]
+        user.username = local_part
+        user.save(update_fields=["username"])
+
     # Ensure the user has a short reference code profile
     profile, created = Profile.objects.get_or_create(user=user)
     if created or not profile.ref_code:
@@ -172,9 +179,37 @@ def list_conversations(request):
         Conversation.objects.filter(memberships__user=request.user)
         .distinct()
         .order_by("-updated_at")
+        .prefetch_related("memberships__user__profile")
     )
     serializer = ConversationSerializer(qs, many=True)
-    return Response({"results": serializer.data})
+    data = serializer.data
+
+    # For 1:1 conversations, show the "other" participant's name as title
+    # on a per-user basis, and avoid leaking emails.
+    conversations_by_id = {conv.id: conv for conv in qs}
+    for item in data:
+        conv_id = item.get("id")
+        conv = conversations_by_id.get(conv_id)
+        if conv and not conv.is_group:
+            others = [
+                m.user
+                for m in conv.memberships.all()
+                if m.user_id != request.user.id
+            ]
+            other_user = others[0] if others else request.user
+            profile = getattr(other_user, "profile", None)
+            display_label = (
+                (getattr(profile, "display_name", "") or "").strip()
+                or (other_user.username or "").strip()
+                or "User"
+            )
+            item["title"] = display_label
+        # As a last resort, trim any accidental emails.
+        title = item.get("title") or ""
+        if "@" in title:
+            item["title"] = title.split("@", 1)[0]
+
+    return Response({"results": data})
 
 
 @api_view(["GET", "PATCH"])
@@ -239,9 +274,11 @@ def start_conversation_by_ref_code(request):
 
     if conversation is None:
         # Create a new conversation and add both users.
-        title = f"Chat with {target_user.username or target_user.email}"
+        display_label = (
+            target_profile.display_name or target_user.username or "User"
+        )
         conversation = Conversation.objects.create(
-            title=title, is_group=False
+            title=display_label, is_group=False
         )
         ConversationMember.objects.bulk_create(
             [
