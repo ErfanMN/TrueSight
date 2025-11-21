@@ -41,6 +41,7 @@ class ConversationMember(models.Model):
     )
     joined_at = models.DateTimeField(auto_now_add=True)
     is_admin = models.BooleanField(default=False)
+    last_read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ("conversation", "user")
@@ -72,10 +73,40 @@ class Message(models.Model):
         ordering = ["created_at"]
         indexes = [
             models.Index(fields=["conversation", "created_at"]),
+            models.Index(fields=["sender", "created_at"]),
         ]
 
     def __str__(self) -> str:
         return f"Message {self.pk} in {self.conversation}"
+
+
+class TypingStatus(models.Model):
+    """
+    Ephemeral typing indicator per conversation/user.
+    Entries are considered active only for a short window based on updated_at.
+    """
+
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="typing_statuses",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="typing_statuses",
+    )
+    is_typing = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("conversation", "user")
+        indexes = [
+            models.Index(fields=["conversation", "updated_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"TypingStatus(user={self.user_id}, conv={self.conversation_id})"
 
 
 class LoginCode(models.Model):
@@ -120,6 +151,7 @@ class Profile(models.Model):
     ref_code = models.CharField(max_length=6, unique=True)
     display_name = models.CharField(max_length=64, blank=True)
     avatar_color = models.CharField(max_length=7, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

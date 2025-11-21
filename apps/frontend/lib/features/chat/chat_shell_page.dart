@@ -35,10 +35,13 @@ class _ChatShellPageState extends State<ChatShellPage> {
   Conversation? _selectedConversation;
   bool _isLoadingConversations = false;
   String? _conversationsError;
+  bool _hasMoreConversations = false;
 
   final List<ChatMessage> _messages = [];
   bool _isLoadingMessages = false;
   String? _messagesError;
+  bool _hasMoreMessages = false;
+  bool _isLoadingOlderMessages = false;
 
   final TextEditingController _messageController = TextEditingController();
   bool _isSending = false;
@@ -47,6 +50,10 @@ class _ChatShellPageState extends State<ChatShellPage> {
 
   final FocusNode _inputFocusNode = FocusNode();
   Timer? _pollTimer;
+  Timer? _typingDebounce;
+  bool _typingNotified = false;
+  String? _presenceText;
+  String? _typingText;
 
   @override
   void initState() {
@@ -61,6 +68,7 @@ class _ChatShellPageState extends State<ChatShellPage> {
             _selectedConversation!,
             silent: true,
           );
+          _loadConversationTypingAndPresence();
         }
       },
     );
@@ -75,6 +83,7 @@ class _ChatShellPageState extends State<ChatShellPage> {
     _messageController.dispose();
     _inputFocusNode.dispose();
     _pollTimer?.cancel();
+    _typingDebounce?.cancel();
     super.dispose();
   }
 
@@ -182,14 +191,17 @@ class _ChatShellPageState extends State<ChatShellPage> {
     );
   }
 
-  Future<void> _loadConversations() async {
+  Future<void> _loadConversations({bool append = false}) async {
     setState(() {
       _isLoadingConversations = true;
       _conversationsError = null;
     });
 
     try {
-      final uri = Uri.parse('$backendBaseUrl/api/conversations/');
+      final offset = append ? _conversations.length : 0;
+      final uri = Uri.parse(
+        '$backendBaseUrl/api/conversations/?limit=20&offset=$offset',
+      );
       final response = await http.get(uri, headers: _authHeaders);
 
       if (response.statusCode != 200) {
@@ -202,10 +214,14 @@ class _ChatShellPageState extends State<ChatShellPage> {
           .toList();
 
       setState(() {
-        _conversations
-          ..clear()
-          ..addAll(items);
-        if (_conversations.isNotEmpty && _selectedConversation == null) {
+        if (!append) {
+          _conversations.clear();
+        }
+        _conversations.addAll(items);
+        _hasMoreConversations = (body['has_more'] as bool?) ?? false;
+        if (!append &&
+            _conversations.isNotEmpty &&
+            _selectedConversation == null) {
           _selectedConversation = _conversations.first;
           _loadMessagesForConversation(_selectedConversation!);
         }
@@ -253,6 +269,8 @@ class _ChatShellPageState extends State<ChatShellPage> {
         _messages
           ..clear()
           ..addAll(items);
+        _hasMoreMessages = (body['has_more'] as bool?) ?? false;
+        _isLoadingOlderMessages = false;
       });
     } catch (e) {
       setState(() {
@@ -264,6 +282,155 @@ class _ChatShellPageState extends State<ChatShellPage> {
           _isLoadingMessages = false;
         });
       }
+    }
+  }
+
+  Future<void> _loadOlderMessages() async {
+    final conversation = _selectedConversation;
+    if (conversation == null) return;
+    if (_messages.isEmpty || !_hasMoreMessages) return;
+
+    setState(() {
+      _isLoadingOlderMessages = true;
+    });
+
+    try {
+      final oldestId = _messages.first.id;
+      final uri = Uri.parse(
+        '$backendBaseUrl/api/conversations/${conversation.id}/messages/?before=$oldestId',
+      );
+      final response = await http.get(uri, headers: _authHeaders);
+
+      if (response.statusCode != 200) {
+        throw Exception(
+          'Failed to load older messages (${response.statusCode})',
+        );
+      }
+
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final items = (body['results'] as List<dynamic>? ?? [])
+          .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
+          .toList();
+
+      setState(() {
+        _messages.insertAll(0, items);
+        _hasMoreMessages = (body['has_more'] as bool?) ?? false;
+      });
+    } catch (e) {
+      setState(() {
+        _messagesError = e.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingOlderMessages = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadConversationTypingAndPresence() async {
+    final conversation = _selectedConversation;
+    if (conversation == null) return;
+
+    try {
+      final uri = Uri.parse(
+        '$backendBaseUrl/api/conversations/${conversation.id}/typing/',
+      );
+      final response = await http.get(uri, headers: _authHeaders);
+      if (response.statusCode != 200) {
+        return;
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final participants = (body['participants'] as List<dynamic>? ?? [])
+          .cast<Map<String, dynamic>>();
+      final typingIds = (body['typing_ids'] as List<dynamic>? ?? [])
+          .map((e) => e as int)
+          .toList();
+
+      // Presence text
+      String? presenceText;
+      if (participants.isNotEmpty) {
+        if (conversation.isGroup) {
+          final onlineCount = participants
+              .where((p) => (p['is_online'] as bool?) ?? false)
+              .length;
+          if (onlineCount > 0) {
+            presenceText = '$onlineCount online';
+          }
+        } else {
+          Map<String, dynamic>? other;
+          try {
+            other = participants.firstWhere(
+              (p) => (p['id'] as int?) != widget.currentUserId,
+            );
+          } catch (_) {
+            other = participants.first;
+          }
+
+          if (other != null) {
+            final isOnline = (other['is_online'] as bool?) ?? false;
+            if (isOnline) {
+              presenceText = 'Online';
+            } else {
+              final lastSeenStr = other['last_seen_at'] as String?;
+              if (lastSeenStr != null) {
+                final lastSeen = DateTime.tryParse(lastSeenStr);
+                if (lastSeen != null) {
+                  final now = DateTime.now().toUtc();
+                  final diff = now.difference(lastSeen.toUtc());
+                  if (diff.inMinutes < 1) {
+                    presenceText = 'Last seen just now';
+                  } else if (diff.inMinutes < 60) {
+                    presenceText = 'Last seen ${diff.inMinutes} min ago';
+                  } else if (diff.inHours < 24) {
+                    presenceText = 'Last seen ${diff.inHours} h ago';
+                  } else {
+                    presenceText = 'Last seen ${diff.inDays} d ago';
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Typing text (exclude self)
+      String? typingText;
+      final typingOthers = typingIds
+          .where((id) => id != widget.currentUserId)
+          .toSet();
+
+      if (typingOthers.isNotEmpty) {
+        final names = <String>[];
+        for (final p in participants) {
+          final id = p['id'] as int?;
+          if (id != null && typingOthers.contains(id)) {
+            final displayName =
+                (p['display_name'] as String?)?.trim().isNotEmpty == true
+                    ? (p['display_name'] as String)
+                    : ((p['username'] as String?) ?? 'User');
+            names.add(displayName);
+          }
+        }
+        if (names.isNotEmpty) {
+          if (names.length == 1) {
+            typingText = '${names.first} is typing…';
+          } else if (names.length == 2) {
+            typingText = '${names[0]} and ${names[1]} are typing…';
+          } else {
+            typingText = 'Several people are typing…';
+          }
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _presenceText = presenceText;
+        _typingText = typingText;
+      });
+    } catch (_) {
+      // Ignore for now; presence is best-effort.
     }
   }
 
@@ -294,6 +461,8 @@ class _ChatShellPageState extends State<ChatShellPage> {
       }
 
       _messageController.clear();
+      // Reset typing status once the message is sent.
+      _setTyping(isTyping: false);
 
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       final created = ChatMessage.fromJson(body);
@@ -311,6 +480,30 @@ class _ChatShellPageState extends State<ChatShellPage> {
           _isSending = false;
         });
       }
+    }
+  }
+
+  Future<void> _setTyping({required bool isTyping}) async {
+    final conversation = _selectedConversation;
+    if (conversation == null) return;
+
+    if (isTyping == _typingNotified) return;
+    _typingNotified = isTyping;
+
+    try {
+      final uri = Uri.parse(
+        '$backendBaseUrl/api/conversations/${conversation.id}/typing/',
+      );
+      await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          ..._authHeaders,
+        },
+        body: jsonEncode({'is_typing': isTyping}),
+      );
+    } catch (_) {
+      // typing is best-effort
     }
   }
 
@@ -491,6 +684,10 @@ class _ChatShellPageState extends State<ChatShellPage> {
                     },
                     onStartNewConversation: _showStartConversationDialog,
                     ownRefCode: widget.refCode,
+                    hasMore: _hasMoreConversations,
+                    onLoadMore: _hasMoreConversations
+                        ? () => _loadConversations(append: true)
+                        : null,
                   ),
                 ),
                 const VerticalDivider(width: 1),
@@ -504,6 +701,12 @@ class _ChatShellPageState extends State<ChatShellPage> {
                     messageController: _messageController,
                     onSendPressed: _isSending ? null : _sendMessage,
                     inputFocusNode: _inputFocusNode,
+                    presenceText: _presenceText,
+                    typingText: _typingText,
+                    hasMoreMessages: _hasMoreMessages,
+                    isLoadingOlderMessages: _isLoadingOlderMessages,
+                    onLoadOlderMessages:
+                        _hasMoreMessages ? _loadOlderMessages : null,
                   ),
                 ),
               ],
@@ -528,6 +731,10 @@ class _ChatShellPageState extends State<ChatShellPage> {
                   },
                   onStartNewConversation: _showStartConversationDialog,
                   ownRefCode: widget.refCode,
+                  hasMore: _hasMoreConversations,
+                  onLoadMore: _hasMoreConversations
+                      ? () => _loadConversations(append: true)
+                      : null,
                 ),
               ),
               const Divider(height: 1),
@@ -541,6 +748,12 @@ class _ChatShellPageState extends State<ChatShellPage> {
                   messageController: _messageController,
                   onSendPressed: _isSending ? null : _sendMessage,
                   inputFocusNode: _inputFocusNode,
+                  presenceText: _presenceText,
+                  typingText: _typingText,
+                  hasMoreMessages: _hasMoreMessages,
+                  isLoadingOlderMessages: _isLoadingOlderMessages,
+                  onLoadOlderMessages:
+                      _hasMoreMessages ? _loadOlderMessages : null,
                 ),
               ),
             ],
@@ -561,6 +774,8 @@ class ConversationList extends StatelessWidget {
     required this.onConversationSelected,
     required this.onStartNewConversation,
     required this.ownRefCode,
+    required this.hasMore,
+    required this.onLoadMore,
   });
 
   final List<Conversation> conversations;
@@ -570,6 +785,8 @@ class ConversationList extends StatelessWidget {
   final ValueChanged<Conversation> onConversationSelected;
   final VoidCallback onStartNewConversation;
   final String ownRefCode;
+  final bool hasMore;
+  final VoidCallback? onLoadMore;
 
   @override
   Widget build(BuildContext context) {
@@ -663,10 +880,39 @@ class ConversationList extends StatelessWidget {
                     child: Text('No conversations yet.'),
                   );
                 }
+                final totalCount =
+                    conversations.length + (hasMore ? 1 : 0);
+
                 return ListView.separated(
-                  itemCount: conversations.length,
+                  itemCount: totalCount,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (context, index) {
+                    if (hasMore && index == conversations.length) {
+                      return ListTile(
+                        dense: true,
+                        onTap: onLoadMore,
+                        title: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (isLoading)
+                              const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            if (isLoading) const SizedBox(width: 8),
+                            Text(
+                              'Load more conversations',
+                              style:
+                                  Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
                     final conversation = conversations[index];
                     final isSelected = conversation.id == selectedConversationId;
 
@@ -724,6 +970,11 @@ class ConversationArea extends StatelessWidget {
     required this.messageController,
     required this.onSendPressed,
     required this.inputFocusNode,
+    this.presenceText,
+    this.typingText,
+    this.hasMoreMessages = false,
+    this.isLoadingOlderMessages = false,
+    this.onLoadOlderMessages,
   });
 
   final Conversation? conversation;
@@ -734,6 +985,11 @@ class ConversationArea extends StatelessWidget {
   final TextEditingController messageController;
   final VoidCallback? onSendPressed;
   final FocusNode inputFocusNode;
+  final String? presenceText;
+  final String? typingText;
+  final bool hasMoreMessages;
+  final bool isLoadingOlderMessages;
+  final VoidCallback? onLoadOlderMessages;
 
   Color _avatarColorFromHex(String? hex, Color fallback) {
     if (hex == null || hex.isEmpty) return fallback;
@@ -772,8 +1028,76 @@ class ConversationArea extends StatelessWidget {
 
     final colorScheme = Theme.of(context).colorScheme;
 
+    final title = conversation!.title.isNotEmpty
+        ? conversation!.title
+        : 'Conversation ${conversation!.id}';
+
     return Column(
       children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceVariant.withOpacity(0.6),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.25),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
+            border: Border(
+              bottom: BorderSide(
+                color: colorScheme.outlineVariant.withOpacity(0.8),
+              ),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  if (presenceText != null && typingText == null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12),
+                      child: Text(
+                        presenceText!,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(
+                              color: colorScheme.onSurfaceVariant
+                                  .withOpacity(0.85),
+                            ),
+                      ),
+                    ),
+                ],
+              ),
+              if (typingText != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  typingText!,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: colorScheme.primary,
+                        fontStyle: FontStyle.italic,
+                      ),
+                ),
+              ],
+            ],
+          ),
+        ),
         if (isLoading)
           const LinearProgressIndicator(minHeight: 2)
         else
@@ -794,97 +1118,160 @@ class ConversationArea extends StatelessWidget {
                   ? const Center(
                       child: Text('No messages yet.'),
                     )
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: messages.length,
-                      itemBuilder: (context, index) {
-                        final msg = messages[index];
-                        final isOwn =
-                            msg.senderId != null && msg.senderId == currentUserId;
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        final maxBubbleWidth =
+                            constraints.maxWidth * 0.65; // max ~65% width
 
-                        final bubble = Container(
-                          padding: const EdgeInsets.symmetric(
-                            vertical: 8,
-                            horizontal: 12,
-                          ),
-                          decoration: BoxDecoration(
-                            gradient: isOwn
-                                ? LinearGradient(
-                                    colors: [
-                                      colorScheme.primary.withOpacity(0.95),
-                                      colorScheme.primary.withOpacity(0.80),
-                                    ],
-                                  )
-                                : LinearGradient(
-                                    colors: [
-                                      colorScheme.surfaceVariant
-                                          .withOpacity(0.9),
-                                      colorScheme.surface
-                                          .withOpacity(0.9),
-                                    ],
+                        final totalCount =
+                            messages.length + (hasMoreMessages ? 1 : 0);
+
+                        return ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: totalCount,
+                          itemBuilder: (context, index) {
+                            if (hasMoreMessages && index == 0) {
+                              return Padding(
+                                padding:
+                                    const EdgeInsets.only(bottom: 12.0),
+                                child: Center(
+                                  child: TextButton.icon(
+                                    onPressed: isLoadingOlderMessages
+                                        ? null
+                                        : onLoadOlderMessages,
+                                    icon: isLoadingOlderMessages
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child:
+                                                CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : const Icon(Icons.history),
+                                    label: const Text('Load older messages'),
                                   ),
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color: isOwn
-                                  ? colorScheme.primary.withOpacity(0.4)
-                                  : colorScheme.surfaceVariant
-                                      .withOpacity(0.6),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.25),
-                                blurRadius: 6,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (!isOwn)
-                                Text(
-                                  (msg.senderName?.isNotEmpty ?? false)
-                                      ? msg.senderName!
-                                      : 'User',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .labelSmall
-                                      ?.copyWith(
-                                        color: colorScheme.secondary
-                                            .withOpacity(0.9),
-                                      ),
                                 ),
-                              if (!isOwn) const SizedBox(height: 2),
-                              Text(
-                                msg.content,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodyMedium
-                                    ?.copyWith(
-                                      color: isOwn
-                                          ? colorScheme.onPrimary
-                                          : colorScheme.onSurface,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        );
+                              );
+                            }
 
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Row(
-                            mainAxisAlignment: isOwn
-                                ? MainAxisAlignment.end
-                                : MainAxisAlignment.start,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (!isOwn) _buildAvatar(context, msg, isOwn),
-                              if (!isOwn) const SizedBox(width: 8),
-                              Flexible(child: bubble),
-                              if (isOwn) const SizedBox(width: 8),
-                              if (isOwn) _buildAvatar(context, msg, isOwn),
-                            ],
-                          ),
+                            final msgIndex =
+                                hasMoreMessages ? index - 1 : index;
+                            final msg = messages[msgIndex];
+                            final isOwn = msg.senderId != null &&
+                                msg.senderId == currentUserId;
+
+                            final bubble = Container(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 8,
+                                horizontal: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                gradient: isOwn
+                                    ? LinearGradient(
+                                        colors: [
+                                          colorScheme.primary
+                                              .withOpacity(0.95),
+                                          colorScheme.primary
+                                              .withOpacity(0.80),
+                                        ],
+                                      )
+                                    : LinearGradient(
+                                        colors: [
+                                          colorScheme.surfaceVariant
+                                              .withOpacity(0.9),
+                                          colorScheme.surface
+                                              .withOpacity(0.9),
+                                        ],
+                                      ),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(
+                                  color: isOwn
+                                      ? colorScheme.primary.withOpacity(0.4)
+                                      : colorScheme.surfaceVariant
+                                          .withOpacity(0.6),
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.25),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (!isOwn)
+                                    Text(
+                                      (msg.senderName?.isNotEmpty ?? false)
+                                          ? msg.senderName!
+                                          : 'User',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelSmall
+                                          ?.copyWith(
+                                            color: colorScheme.secondary
+                                                .withOpacity(0.9),
+                                          ),
+                                    ),
+                                  if (!isOwn) const SizedBox(height: 2),
+                                  Text(
+                                    msg.content,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(
+                                          color: isOwn
+                                              ? colorScheme.onPrimary
+                                              : colorScheme.onSurface,
+                                        ),
+                                  ),
+                                  if (isOwn) const SizedBox(height: 2),
+                                  if (isOwn)
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Icon(
+                                        msg.readByAll
+                                            ? Icons.done_all
+                                            : Icons.done,
+                                        size: 14,
+                                        color: colorScheme.onPrimary
+                                            .withOpacity(
+                                                msg.readByAll ? 0.95 : 0.7),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            );
+
+                            return Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 4),
+                              child: Row(
+                                mainAxisAlignment: isOwn
+                                    ? MainAxisAlignment.end
+                                    : MainAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (!isOwn)
+                                    _buildAvatar(context, msg, isOwn),
+                                  if (!isOwn) const SizedBox(width: 8),
+                                  ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxWidth: maxBubbleWidth,
+                                    ),
+                                    child: IntrinsicWidth(
+                                      child: bubble,
+                                    ),
+                                  ),
+                                  if (isOwn) const SizedBox(width: 8),
+                                  if (isOwn)
+                                    _buildAvatar(context, msg, isOwn),
+                                ],
+                              ),
+                            );
+                          },
                         );
                       },
                     ),
@@ -925,6 +1312,18 @@ class ConversationArea extends StatelessWidget {
                     controller: messageController,
                     minLines: 1,
                     maxLines: 4,
+                    onChanged: (value) {
+                      // Typing indicator: mark as typing immediately,
+                      // then clear a short time after the user stops.
+                      final shellState =
+                          context.findAncestorStateOfType<_ChatShellPageState>();
+                      shellState?._typingDebounce?.cancel();
+                      shellState?._setTyping(isTyping: true);
+                      shellState?._typingDebounce = Timer(
+                        const Duration(seconds: 3),
+                        () => shellState?._setTyping(isTyping: false),
+                      );
+                    },
                     decoration: const InputDecoration(
                       hintText: 'Type a message…',
                       border: OutlineInputBorder(),

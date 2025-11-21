@@ -7,6 +7,7 @@ class ChatMessage {
     this.senderId,
     this.senderName,
     this.senderAvatarColor,
+    this.readByAll = false,
   });
 
   final int id;
@@ -16,6 +17,7 @@ class ChatMessage {
   final int? senderId;
   final String? senderName;
   final String? senderAvatarColor;
+   final bool readByAll;
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
     final sender = json['sender'] as Map<String, dynamic>?;
@@ -33,6 +35,7 @@ class ChatMessage {
           : null,
       senderAvatarColor:
           sender != null ? sender['avatar_color'] as String? : null,
+      readByAll: json['read_by_all'] as bool? ?? false,
     );
   }
 }

@@ -20,4 +20,9 @@ urlpatterns = [
         views.conversation_messages,
         name="conversation_messages",
     ),
+    path(
+        "conversations/<int:conversation_id>/typing/",
+        views.conversation_typing,
+        name="conversation_typing",
+    ),
 ]
